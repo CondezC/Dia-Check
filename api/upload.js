@@ -1,4 +1,5 @@
 import { IncomingForm } from "formidable";
+import fs from "fs";
 import { processUpload } from "../lib/processUpload.js";
 
 export const config = {
@@ -7,7 +8,7 @@ export const config = {
 
 export default async function handler(req, res) {
   // -----------------------------------------
-  // 🚀 1) BASE64 MODE (JSON) — SKIP FORMIDABLE
+  // 🚀 1) BASE64 MODE (JSON)
   // -----------------------------------------
   if (req.headers["content-type"]?.includes("application/json")) {
     try {
@@ -32,7 +33,6 @@ export default async function handler(req, res) {
   const form = new IncomingForm({
     multiples: false,
     keepExtensions: true,
-    uploadDir: "./uploads", // localhost only
     maxFileSize: 10 * 1024 * 1024, // 10MB
   });
 
@@ -46,12 +46,14 @@ export default async function handler(req, res) {
       const file = Array.isArray(files.image) ? files.image[0] : files.image;
 
       if (!file) {
-        return res
-          .status(400)
-          .json({ error: "Missing image file (form-data)." });
+        return res.status(400).json({ error: "Missing image file." });
       }
 
-      const result = await processUpload({ file, base64: null });
+      // 🔥 Convert file → Base64 (Vercel safe)
+      const fileBuffer = fs.readFileSync(file.filepath);
+      const base64 = `data:${file.mimetype};base64,${fileBuffer.toString("base64")}`;
+
+      const result = await processUpload({ file: null, base64 });
       return res.status(200).json(result);
 
     } catch (err) {
