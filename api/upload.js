@@ -1,61 +1,64 @@
-import axios from "axios";
+import { IncomingForm } from "formidable";
+import fs from "fs";
+import { processUpload } from "../lib/processUpload.js";
+
+export const config = {
+  api: { bodyParser: { sizeLimit: "15mb" } },
+};
 
 export default async function handler(req, res) {
-  try {
-    if (req.method !== "POST") {
-      return res.status(405).json({ error: "Method not allowed" });
+  // -----------------------------------------
+  // 🚀 1) BASE64 MODE (JSON)
+  // -----------------------------------------
+  if (req.headers["content-type"]?.includes("application/json")) {
+    try {
+      const base64 = req.body.image;
+
+      if (!base64) {
+        return res.status(400).json({ error: "Missing base64 image." });
+      }
+
+      const result = await processUpload({ file: null, base64 });
+      return res.status(200).json(result);
+
+    } catch (err) {
+      console.error("❌ Base64 upload error:", err.message);
+      return res.status(500).json({ error: "Upload failed", detail: err.message });
     }
-
-    const { image } = req.body;
-
-    if (!image) {
-      return res.status(400).json({ error: "No image received." });
-    }
-
-    // --------------------------------------------
-    // 1️⃣ Load env vars (Vercel env variables)
-    // --------------------------------------------
-    const MODEL_ID = process.env.MODEL_ID || process.env.ROBOFLOW_MODEL_ID;
-    const API_KEY = process.env.API_KEY || process.env.ROBOFLOW_API_KEY;
-    const API_URL = process.env.API_URL || process.env.ROBOFLOW_API_URL;
-
-    if (!MODEL_ID || !API_KEY || !API_URL) {
-      return res.status(500).json({
-        error: "Missing Roboflow environment variables."
-      });
-    }
-
-    // --------------------------------------------
-    // 2️⃣ Strip "data:image/...;base64," prefix
-    // --------------------------------------------
-    const base64 = image.replace(/^data:image\/\w+;base64,/, "");
-
-    // --------------------------------------------
-    // 3️⃣ Prepare Roboflow request
-    // --------------------------------------------
-    const url = `${API_URL}/${MODEL_ID}?api_key=${API_KEY}`;
-
-    const rfResponse = await axios({
-      method: "POST",
-      url,
-      data: base64,
-      headers: {
-        "Content-Type": "application/x-www-form-urlencoded",
-      },
-      maxBodyLength: Infinity,
-    });
-
-    console.log("📡 Roboflow Response:", rfResponse.data);
-
-    // --------------------------------------------
-    // 4️⃣ Return prediction to frontend
-    // --------------------------------------------
-    return res.status(200).json(rfResponse.data);
-
-  } catch (error) {
-    console.error("❌ Upload API Error:", error.response?.data || error);
-    return res.status(500).json({
-      error: "Roboflow processing failed."
-    });
   }
+
+  // -----------------------------------------
+  // 🚀 2) FILE UPLOAD MODE (FORM-DATA)
+  // -----------------------------------------
+  const form = new IncomingForm({
+    multiples: false,
+    keepExtensions: true,
+    maxFileSize: 10 * 1024 * 1024, // 10MB
+  });
+
+  form.parse(req, async (err, fields, files) => {
+    try {
+      if (err) {
+        console.error("❌ Formidable parse error:", err.message);
+        return res.status(400).json({ error: "Form parsing failed" });
+      }
+
+      const file = Array.isArray(files.image) ? files.image[0] : files.image;
+
+      if (!file) {
+        return res.status(400).json({ error: "Missing image file." });
+      }
+
+      // 🔥 Convert file → Base64 (Vercel safe)
+      const fileBuffer = fs.readFileSync(file.filepath);
+      const base64 = `data:${file.mimetype};base64,${fileBuffer.toString("base64")}`;
+
+      const result = await processUpload({ file: null, base64 });
+      return res.status(200).json(result);
+
+    } catch (err) {
+      console.error("❌ Upload handler error:", err.message);
+      return res.status(500).json({ error: "Upload failed", detail: err.message });
+    }
+  });
 }
